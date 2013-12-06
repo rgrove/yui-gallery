@@ -37,6 +37,9 @@ var DOM = Y.DOM,
     // body.
     canScrollBody = !!Y.UA.webkit,
 
+    // TODO: feature test
+    hasCSSPointerEvents = true,
+
     // We need to handle Ctrl-Clicks as right-clicks on Mac.
     isMac = typeof navigator !== 'undefined' && /^mac/i.test(navigator.platform),
 
@@ -254,7 +257,9 @@ var DragDrop = Y.Base.create('dragdrop', Y.Base, [], {
                 {standAlone: true}, this),
 
             docNode.on('gesturemoveend', this._onDocMoveEnd,
-                {standAlone: true}, this)
+                {standAlone: true}, this),
+
+            Y.one(win).after('scroll', this._afterWindowScroll, this)
         ];
 
         if (!this._containerIsBody) {
@@ -331,6 +336,13 @@ var DragDrop = Y.Base.create('dragdrop', Y.Base, [], {
     @protected
     **/
     _cacheBoundingRects: function () {
+        if (hasCSSPointerEvents) {
+            this._dropElements = Y.Selector.query(this.get('dropSelector'),
+                this._container._node);
+
+            return;
+        }
+
         var dragEl    = this._proxyOrDragNode()._node,
             dropEls   = Y.Selector.query(this.get('dropSelector'), this._container._node),
             dropRects = this._dropRects = [],
@@ -366,6 +378,10 @@ var DragDrop = Y.Base.create('dragdrop', Y.Base, [], {
     @protected
     **/
     _cacheScrollRects: function () {
+        if (hasCSSPointerEvents) {
+            return;
+        }
+
         var scrollRects = this._scrollRects = [],
             scrollEls   = [];
 
@@ -448,11 +464,17 @@ var DragDrop = Y.Base.create('dragdrop', Y.Base, [], {
         if (state.pending) {
             this._endPendingDrag();
         } else if (state.dragging) {
+            var dragNode = this._proxyOrDragNode();
+
             if (state.dropNode) {
                 this._fireDragLeave();
             }
 
-            this._proxyOrDragNode().removeClass(this.classNames.dragging);
+            if (hasCSSPointerEvents) {
+                dragNode._node.style.pointerEvents = 'auto';
+            }
+
+            dragNode.removeClass(this.classNames.dragging);
 
             this._publishAndFire(EVT_DRAG_END, Y.merge(state, {
                 deltaXY: this._getDelta(),
@@ -491,7 +513,24 @@ var DragDrop = Y.Base.create('dragdrop', Y.Base, [], {
         intersection found.
     @protected
     **/
-    _findDropIntersection: function () {
+    _findDropIntersection: hasCSSPointerEvents ? function () {
+        var container = this._container,
+            state     = this._dragState,
+            el        = doc.elementFromPoint(state.viewportXY[0],
+                state.viewportXY[1]),
+
+            parentEl;
+
+        if (!el || el === container || el === state.dragNode._node) {
+            return null;
+        }
+
+        if (Y.Array.indexOf(this._dropElements, el) >= 0) {
+            return el;
+        }
+
+        return null;
+    } : function () {
         var dropRects      = this._dropRects,
             state          = this._dragState,
             originalDragEl = state.dragNode._node, // original drag node, never a proxy
@@ -533,7 +572,9 @@ var DragDrop = Y.Base.create('dragdrop', Y.Base, [], {
     @return {Object[]} Array of intersected scroll zones.
     @protected
     **/
-    _findScrollIntersections: function () {
+    _findScrollIntersections: hasCSSPointerEvents ? function () {
+        // TODO
+    } : function () {
         var intersections = [],
             scrollRects   = this._scrollRects;
 
@@ -1080,11 +1121,27 @@ var DragDrop = Y.Base.create('dragdrop', Y.Base, [], {
             state.offsetXY = pointerOffset;
         }
 
+        var proxyOrDragNode = this._proxyOrDragNode();
+
+        if (hasCSSPointerEvents) {
+            proxyOrDragNode._node.style.pointerEvents = 'none';
+        }
+
         state.dragNode.addClass(this.classNames.dragging);
-        this._proxyOrDragNode().addClass(this.classNames.dragging);
+        proxyOrDragNode.addClass(this.classNames.dragging);
 
         this.sync();
         this._fireDrag();
+    },
+
+    /**
+    Handles window scroll events.
+
+    @method _afterWindowScroll
+    @protected
+    **/
+    _afterWindowScroll: function () {
+        this.sync();
     },
 
     /**
@@ -1128,6 +1185,11 @@ var DragDrop = Y.Base.create('dragdrop', Y.Base, [], {
             // This is necessary to prevent the page from scrolling on touch
             // devices.
             e.preventDefault();
+
+            state.viewportXY = [
+                e.pageX - this._viewportScrollOffsets[0],
+                e.pageY - this._viewportScrollOffsets[1]
+            ];
 
             this._fireDrag();
         } else if (state.pending) {
